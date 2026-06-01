@@ -1,5 +1,10 @@
 import numpy as np
 from sklearn.metrics.pairwise import rbf_kernel
+from qiskit_aer import AerSimulator
+import numpy as np
+from qiskit import transpile
+from qiskit_aer import AerSimulator
+
 
 
 class BaseKernel:
@@ -122,6 +127,65 @@ class FidelityQuantumKernel(BaseKernel):
         K = np.clip(K, 0.0, 1.0)
 
         return K
+
+
+    def kernel_from_circuits(self, circuits_A, circuits_B, shots=None):
+        """
+        Compute fidelity kernel using Qiskit AerSimulator from state-preparation circuits.
+
+        Parameters
+        ----------
+        circuits_A : list[QuantumCircuit]
+            Circuits preparing |psi_A>
+        circuits_B : list[QuantumCircuit]
+            Circuits preparing |psi_B>
+        shots : int or None
+            If None -> uses statevector simulation (exact)
+            If int  -> uses sampling approximation
+
+        Returns
+        -------
+        K : np.ndarray
+            Shape (n_A, n_B), K[i, j] = |<psi_A_i | psi_B_j>|^2
+        """
+
+        sim = AerSimulator(method="statevector" if shots is None else "automatic")
+
+        n_A = len(circuits_A)
+        n_B = len(circuits_B)
+
+        K = np.zeros((n_A, n_B), dtype=float)
+
+        for i, qc_a in enumerate(circuits_A):
+            for j, qc_b in enumerate(circuits_B):
+
+                # Ensure same size circuits
+                qc_a = transpile(qc_a, sim)
+                qc_b = transpile(qc_b, sim)
+
+                # Build U_A^\dagger U_B acting on |0>
+                qc = qc_b.copy()
+                qc.compose(qc_a.inverse(), inplace=True)
+
+                if shots is None:
+                    # Exact fidelity via statevector
+                    result = sim.run(qc).result()
+                    state = result.get_statevector(qc)
+
+                    # overlap with |0...0> is first amplitude
+                    overlap = state[0]
+                    K[i, j] = np.abs(overlap) ** 2
+
+                else:
+                    # Sampling-based estimate
+                    qc.measure_all()
+                    result = sim.run(qc, shots=shots).result()
+                    counts = result.get_counts()
+
+                    zero_state = "0" * qc.num_qubits
+                    K[i, j] = counts.get(zero_state, 0) / shots
+
+        return np.real(np.clip(K, 0.0, 1.0))
 
     def fit_transform(self, X_train):
         """
