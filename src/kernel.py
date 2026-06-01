@@ -185,7 +185,7 @@ class FidelityQuantumKernel(BaseKernel):
                     zero_state = "0" * qc.num_qubits
                     K[i, j] = counts.get(zero_state, 0) / shots
 
-        return np.real(np.clip(K, 0.0, 1.0))
+        return np.clip(np.real(K), 0.0, 1.0)
 
     def fit_transform(self, X_train):
         """
