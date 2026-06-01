@@ -129,7 +129,7 @@ class FidelityQuantumKernel(BaseKernel):
         return K
 
 
-    def kernel_from_circuits(self, circuits_A, circuits_B, shots=5):
+    def kernel_from_circuits(self, circuits_A, circuits_B, mode="aer", shots=5, backend=None):
         """
         Compute fidelity kernel using Qiskit AerSimulator from state-preparation circuits.
 
@@ -139,47 +139,63 @@ class FidelityQuantumKernel(BaseKernel):
             Circuits preparing |psi_A>
         circuits_B : list[QuantumCircuit]
             Circuits preparing |psi_B>
+        mode : str
+            "statevector" -> exact fidelity from statevector simulation
+            "aer" -> sampling-based estimate using AerSimulator
+            "ibm" -> sampling-based estimate using real IBM hardware
         shots : int or None
-            If None -> uses statevector simulation (exact)
-            If int  -> uses sampling approximation
+            Number of shots for sampling-based modes. Ignored for "statevector".
 
         Returns
         -------
         K : np.ndarray
             Shape (n_A, n_B), K[i, j] = |<psi_A_i | psi_B_j>|^2
         """
-
-        sim = AerSimulator(method="automatic")
-
         n_A = len(circuits_A)
         n_B = len(circuits_B)
 
         K = np.zeros((n_A, n_B), dtype=float)
 
+        # Choose backend
+        if mode == "statevector":
+            shots = None
+            backend = AerSimulator(method="statevector")
+        elif mode == "aer":
+            if shots is None:
+                raise ValueError("Must specify shots for 'aer' mode.")
+            backend = AerSimulator()
+        elif mode == "ibm":
+            if shots is None:
+                raise ValueError("Must specify shots for 'ibm' mode.")
+            if backend is None:
+                raise ValueError("Must specify backend for 'ibm' mode.")
+        else:
+            raise ValueError(f"Invalid mode: {mode}")
+
+        # Transpile circuits
+        circuits_A = [transpile(qc, backend) for qc in circuits_A]
+        circuits_B = [transpile(qc, backend) for qc in circuits_B]
+
         for i, qc_a in enumerate(circuits_A):
             for j, qc_b in enumerate(circuits_B):
-
-                # Ensure same size circuits
-                qc_a = transpile(qc_a, sim)
-                qc_b = transpile(qc_b, sim)
 
                 # Build U_A^\dagger U_B acting on |0>
                 qc = qc_b.copy()
                 qc.compose(qc_a.inverse(), inplace=True)
 
-                if shots is None:
-                    # Exact fidelity via statevector
-                    result = sim.run(qc).result()
-                    state = result.get_statevector(qc)
+                if mode == "statevector":
+                    result = backend.run(qc).result()
+                    final_state = result.get_statevector()
 
-                    # overlap with |0...0> is first amplitude
-                    overlap = state[0]
-                    K[i, j] = np.abs(overlap) ** 2
+                    K[i, j] = np.abs(final_state[0]) ** 2
 
-                else:
-                    # Sampling-based estimate
+                elif mode in ["aer", "ibm"]:
                     qc.measure_all()
-                    result = sim.run(qc, shots=shots).result()
+
+                    job = backend.run(qc, shots=shots)
+
+                    result = job.result()
+
                     counts = result.get_counts()
 
                     zero_state = "0" * qc.num_qubits
