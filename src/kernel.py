@@ -129,7 +129,7 @@ class FidelityQuantumKernel(BaseKernel):
         return K
 
 
-    def kernel_from_circuits(self, circuits_A, circuits_B, shots=None):
+    def kernel_from_circuits(self, circuits_A, circuits_B, shots=5):
         """
         Compute fidelity kernel using Qiskit AerSimulator from state-preparation circuits.
 
@@ -149,7 +149,7 @@ class FidelityQuantumKernel(BaseKernel):
             Shape (n_A, n_B), K[i, j] = |<psi_A_i | psi_B_j>|^2
         """
 
-        sim = AerSimulator(method="statevector" if shots is None else "automatic")
+        sim = AerSimulator(method="automatic")
 
         n_A = len(circuits_A)
         n_B = len(circuits_B)

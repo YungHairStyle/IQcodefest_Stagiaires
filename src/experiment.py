@@ -80,7 +80,7 @@ class QuantumAnomalyExperiment:
 
         self.results_ = None
 
-    def run(self, verbose=True):
+    def run(self, verbose=False):
         """
         Run the full experiment.
 
@@ -95,7 +95,7 @@ class QuantumAnomalyExperiment:
         # ------------------------------------------------------------
         # 1. Load raw data.
         # ------------------------------------------------------------
-        X_train_raw, X_test_raw, y_test, raw = self.dataset.load()
+        X_train_raw, X_test_raw, y_test, raw = self.dataset()
 
         if verbose:
             print("Loaded data:")
