@@ -115,7 +115,9 @@ class AngleFeatureMap(BaseFeatureMap):
         for _ in range(self.reps):
             # Local angle encoding.
             for q in range(n_qubits):
-                qc.ry(float(x[q]), q)
+                qc.rz(-np.pi/2, q)
+                qc.rx(x[q], q)
+                qc.rz(np.pi/2, q)
                 qc.rz(float(x[q]), q)
 
             # Nearest-neighbor entangling feature interactions.
