@@ -202,8 +202,8 @@ class FidelityQuantumKernel(BaseKernel):
 
         # Create Estimator
         if mode == "aer":
-            sampler = AerSampler()
             backend = AerSimulator()
+            sampler = AerSampler()
         elif mode == "ibm":
             sampler = IBMsampler(mode=backend)
         else:
@@ -211,8 +211,16 @@ class FidelityQuantumKernel(BaseKernel):
 
         
         # Transpile circuits
-        circuits_A_inverted = [transpile(qc.inverse(), backend) for qc in circuits_A]
-        circuits_B = [transpile(qc, backend) for qc in circuits_B]
+        circuits_A_inverted = []
+        for qc in circuits_A:
+            qc_inv = qc.inverse()
+            qc_inv = transpile(qc_inv, backend)
+            circuits_A_inverted.append(qc_inv)
+        circuits_B = []
+        for qc in circuits_B:
+            qc_t = transpile(qc, backend)
+            circuits_B.append(qc_t)
+
 
         for i, qc_a in enumerate(circuits_A_inverted):
             for j, qc_b in enumerate(circuits_B):
