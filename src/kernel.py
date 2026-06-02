@@ -6,8 +6,8 @@ from qiskit import transpile
 from src.backend import get_ibm_backend
 from itertools import product
 from qiskit.quantum_info import SparsePauliOp
-from qiskit_aer.primitives import EstimatorV2 as AerEstimator
-from qiskit_ibm_runtime import EstimatorV2 as IBMEstimator
+from qiskit_aer.primitives import SamplerV2 as AerSampler
+from qiskit_ibm_runtime import SamplerV2 as IBMsampler
 
 
 def _zero_projector(num_qubits):
@@ -170,7 +170,7 @@ class FidelityQuantumKernel(BaseKernel):
 
         return K
 
-    def kernel_from_circuits(self, circuits_A, circuits_B, mode="aer", precision=None, backend=None):
+    def kernel_from_circuits(self, circuits_A, circuits_B, mode="aer", shots=5, backend=None):
         """
         Compute fidelity kernel using Qiskit AerSimulator from state-preparation circuits.
 
@@ -183,9 +183,8 @@ class FidelityQuantumKernel(BaseKernel):
         mode : str
             "aer" -> sampling-based estimate using AerSimulator
             "ibm" -> sampling-based estimate using real IBM hardware
-        precision : float or None
-            Estimator target precision.
-            Smaller values lead to more shots and longer runtime.
+        shots : int
+            Number of shots for sampling-based estimation.
         backend : Backend or None
             If mode == "ibm", specify the backend to run on.
 
@@ -201,50 +200,37 @@ class FidelityQuantumKernel(BaseKernel):
 
         num_qubits = circuits_A[0].num_qubits
 
-        projector = _zero_projector(num_qubits)
-
         # Create Estimator
         if mode == "aer":
-            estimator = AerEstimator()
+            sampler = AerSampler()
             backend = AerSimulator()
         elif mode == "ibm":
-            if backend is None:
-                raise ValueError("Must specify backend for 'ibm' mode.")
-            estimator = IBMEstimator(mode=backend)
+            sampler = IBMsampler(mode=backend)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
         
         # Transpile circuits
-        circuits_A = [transpile(qc, backend) for qc in circuits_A]
+        circuits_A_inverted = [transpile(qc.inverse(), backend) for qc in circuits_A]
         circuits_B = [transpile(qc, backend) for qc in circuits_B]
 
-        # Build all kernel circuits
-        overlap_circuits = []
-        indices = []
-        for i, qc_a in enumerate(circuits_A):
+        for i, qc_a in enumerate(circuits_A_inverted):
             for j, qc_b in enumerate(circuits_B):
 
                 # Build U_A^\dagger U_B acting on |0>
                 qc = qc_b.copy()
-                qc.compose(qc_a.inverse(), inplace=True)
+                qc.compose(qc_a, inplace=True)
 
-                overlap_circuits.append(qc)
-                indices.append((i, j))
-        pubs = [
-            (qc,projector) for qc in overlap_circuits
-        ]
-        if precision is None:
-            job = estimator.run(pubs)
-        else:
-            job = estimator.run(pubs, precision=precision)
+                qc.measure_all()
 
-        results = job.result()
+                job = sampler.run([qc], shots=shots)
+                result = job.result()
 
-        for (i, j), pub_result in zip(indices, results):
-            fidelity = pub_result.data.evs
+                pub_result = result[0].data.meas.get_counts()
 
-            K[i, j] = fidelity
+                zero_state = "0" * qc.num_qubits
+
+                K[i, j] = pub_result.get(zero_state, 0)
 
         return np.clip(np.real(K), 0.0, 1.0)
 
@@ -268,7 +254,7 @@ class FidelityQuantumKernel(BaseKernel):
         if self.cache_train_states:
             self.train_states_ = train_states
 
-        K_train = self.kernel_from_circuits(train_states, train_states, mode="aer", precision=0.1, backend=get_ibm_backend())
+        K_train = self.kernel_from_circuits(train_states, train_states, mode="aer")
 
         return K_train
 
@@ -304,7 +290,7 @@ class FidelityQuantumKernel(BaseKernel):
                 )
             train_states = self.train_states_
 
-        K_test = self.kernel_from_circuits(test_states, train_states, mode="aer", precision=0.1, backend=get_ibm_backend())
+        K_test = self.kernel_from_circuits(test_states, train_states, mode="aer")
 
         return K_test
 
