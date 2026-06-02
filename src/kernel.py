@@ -3,8 +3,31 @@ from sklearn.metrics.pairwise import rbf_kernel
 from qiskit_aer import AerSimulator
 import numpy as np
 from qiskit import transpile
-from qiskit_aer import AerSimulator
+from src.backend import get_ibm_backend
+from itertools import product
+from qiskit.quantum_info import SparsePauliOp
+from qiskit_aer.primitives import EstimatorV2 as AerEstimator
+from qiskit_ibm_runtime import EstimatorV2 as IBMEstimator
 
+
+def _zero_projector(num_qubits):
+    """
+    Construct
+
+        |0...0><0...0|
+        = ((I + Z)/2)^⊗n
+
+    as a SparsePauliOp.
+    """
+
+    terms = []
+
+    for paulis in product(["I", "Z"], repeat=num_qubits):
+        terms.append(
+            ("".join(paulis), 1 / (2 ** num_qubits))
+        )
+
+    return SparsePauliOp.from_list(terms)
 
 
 class BaseKernel:
@@ -147,7 +170,7 @@ class FidelityQuantumKernel(BaseKernel):
 
         return K
 
-    def kernel_from_circuits(self, circuits_A, circuits_B, mode="aer", shots=5, backend=None):
+    def kernel_from_circuits(self, circuits_A, circuits_B, mode="aer", precision=None, backend=None):
         """
         Compute fidelity kernel using Qiskit AerSimulator from state-preparation circuits.
 
@@ -158,11 +181,13 @@ class FidelityQuantumKernel(BaseKernel):
         circuits_B : list[QuantumCircuit]
             Circuits preparing |psi_B>
         mode : str
-            "statevector" -> exact fidelity from statevector simulation
             "aer" -> sampling-based estimate using AerSimulator
             "ibm" -> sampling-based estimate using real IBM hardware
-        shots : int or None
-            Number of shots for sampling-based modes. Ignored for "statevector".
+        precision : float or None
+            Estimator target precision.
+            Smaller values lead to more shots and longer runtime.
+        backend : Backend or None
+            If mode == "ibm", specify the backend to run on.
 
         Returns
         -------
@@ -174,26 +199,29 @@ class FidelityQuantumKernel(BaseKernel):
 
         K = np.zeros((n_A, n_B), dtype=float)
 
-        # Choose backend
-        if mode == "statevector":
-            shots = None
-            backend = AerSimulator(method="statevector")
-        elif mode == "aer":
-            if shots is None:
-                raise ValueError("Must specify shots for 'aer' mode.")
+        num_qubits = circuits_A[0].num_qubits
+
+        projector = _zero_projector(num_qubits)
+
+        # Create Estimator
+        if mode == "aer":
+            estimator = AerEstimator()
             backend = AerSimulator()
         elif mode == "ibm":
-            if shots is None:
-                raise ValueError("Must specify shots for 'ibm' mode.")
             if backend is None:
                 raise ValueError("Must specify backend for 'ibm' mode.")
+            estimator = IBMEstimator(mode=backend)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+        
         # Transpile circuits
         circuits_A = [transpile(qc, backend) for qc in circuits_A]
         circuits_B = [transpile(qc, backend) for qc in circuits_B]
 
+        # Build all kernel circuits
+        overlap_circuits = []
+        indices = []
         for i, qc_a in enumerate(circuits_A):
             for j, qc_b in enumerate(circuits_B):
 
@@ -201,23 +229,22 @@ class FidelityQuantumKernel(BaseKernel):
                 qc = qc_b.copy()
                 qc.compose(qc_a.inverse(), inplace=True)
 
-                if mode == "statevector":
-                    result = backend.run(qc).result()
-                    final_state = result.get_statevector()
+                overlap_circuits.append(qc)
+                indices.append((i, j))
+        pubs = [
+            (qc,projector) for qc in overlap_circuits
+        ]
+        if precision is None:
+            job = estimator.run(pubs)
+        else:
+            job = estimator.run(pubs, precision=precision)
 
-                    K[i, j] = np.abs(final_state[0]) ** 2
+        results = job.result()
 
-                elif mode in ["aer", "ibm"]:
-                    qc.measure_all()
+        for (i, j), pub_result in zip(indices, results):
+            fidelity = pub_result.data.evs
 
-                    job = backend.run(qc, shots=shots)
-
-                    result = job.result()
-
-                    counts = result.get_counts()
-
-                    zero_state = "0" * qc.num_qubits
-                    K[i, j] = counts.get(zero_state, 0) / shots
+            K[i, j] = fidelity
 
         return np.clip(np.real(K), 0.0, 1.0)
 
@@ -241,7 +268,7 @@ class FidelityQuantumKernel(BaseKernel):
         if self.cache_train_states:
             self.train_states_ = train_states
 
-        K_train = self.kernel_from_circuits(train_states, train_states, mode="aer", shots=5)
+        K_train = self.kernel_from_circuits(train_states, train_states, mode="aer", precision=0.1, backend=get_ibm_backend())
 
         return K_train
 
@@ -277,7 +304,7 @@ class FidelityQuantumKernel(BaseKernel):
                 )
             train_states = self.train_states_
 
-        K_test = self.kernel_from_circuits(test_states, train_states, mode="aer", shots=5)
+        K_test = self.kernel_from_circuits(test_states, train_states, mode="aer", precision=0.1, backend=get_ibm_backend())
 
         return K_test
 

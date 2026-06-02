@@ -19,7 +19,7 @@ def get_ibm_backend():
 
     service = QiskitRuntimeService()
     backend = service.least_busy(simulator=False, operational=True)
-    print(f"Selected backend: {backend.name()}")
+    print(f"Selected backend: {backend.name}")
 
     return backend
 
