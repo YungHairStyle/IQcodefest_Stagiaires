@@ -205,21 +205,19 @@ class FidelityQuantumKernel(BaseKernel):
         if mode == "aer":
             backend = AerSimulator()
             sampler = AerSampler()
-
             # Transpile circuits
             circuits_A_inverted = []
             for qc in circuits_A:
                 qc_inv = qc.inverse()
                 qc_inv = transpile(qc_inv, backend)
                 circuits_A_inverted.append(qc_inv)
-            circuits_B = []
+            circuits_B_t = []
             for qc in circuits_B:
                 qc_t = transpile(qc, backend)
-                circuits_B.append(qc_t)
+                circuits_B_t.append(qc_t)
 
             for i, qc_a in enumerate(circuits_A_inverted):
-                for j, qc_b in enumerate(circuits_B):
-
+                for j, qc_b in enumerate(circuits_B_t):
                     # Build U_A^\dagger U_B acting on |0>
                     qc = qc_b.copy()
                     qc.compose(qc_a, inplace=True)
@@ -233,7 +231,7 @@ class FidelityQuantumKernel(BaseKernel):
 
                     zero_state = "0" * qc.num_qubits
 
-                    K[i, j] = pub_result.get(zero_state, 0)
+                    K[i, j] = pub_result.get(zero_state, 0)/shots
 
         elif mode == "ibm":
             # Transpile circuits
@@ -242,15 +240,15 @@ class FidelityQuantumKernel(BaseKernel):
                 qc_inv = qc.inverse()
                 qc_inv = transpile(qc_inv, backend)
                 circuits_A_inverted.append(qc_inv)
-            circuits_B = []
+            circuits_B_t = []
             for qc in circuits_B:
                 qc_t = transpile(qc, backend)
-                circuits_B.append(qc_t)
+                circuits_B_t.append(qc_t)
 
             with Session(backend=backend) as session:
                 sampler = IBMsampler(mode=session)
                 for i, qc_a in enumerate(circuits_A_inverted):
-                    for j, qc_b in enumerate(circuits_B):
+                    for j, qc_b in enumerate(circuits_B_t):
 
                         # Build U_A^\dagger U_B acting on |0>
                         qc = qc_b.copy()
@@ -265,10 +263,11 @@ class FidelityQuantumKernel(BaseKernel):
 
                         zero_state = "0" * qc.num_qubits
 
-                        K[i, j] = pub_result.get(zero_state, 0)
+                        K[i, j] = pub_result.get(zero_state, 0)/shots
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+        print(K)
         return np.clip(np.real(K), 0.0, 1.0)
 
     def fit_transform(self, X_train):
@@ -291,7 +290,7 @@ class FidelityQuantumKernel(BaseKernel):
         if self.cache_train_states:
             self.train_states_ = train_states
 
-        K_train = self.kernel_from_circuits(train_states, train_states, mode="ibm", backend=get_ibm_backend())
+        K_train = self.kernel_from_circuits(train_states, train_states, mode="ibm", backend=get_ibm_backend(), shots=500)
 
         return K_train
 
@@ -327,7 +326,7 @@ class FidelityQuantumKernel(BaseKernel):
                 )
             train_states = self.train_states_
 
-        K_test = self.kernel_from_circuits(test_states, train_states, mode="ibm", backend=get_ibm_backend())
+        K_test = self.kernel_from_circuits(test_states, train_states, mode="ibm", backend=get_ibm_backend(), shots=500)
 
         return K_test
 
