@@ -1,6 +1,7 @@
 import numpy as np
 from qiskit import QuantumCircuit
 from qiskit.quantum_info import Statevector
+from qiskit.circuit.library import StatePreparation
 
 
 class BaseFeatureMap:
@@ -233,27 +234,15 @@ class AmplitudeFeatureMap(BaseFeatureMap):
                 )
 
         return x
-
-    def build_circuit(self, x):
-        """
-        Build a Qiskit circuit that amplitude-encodes x.
-
-        Parameters
-        ----------
-        x : np.ndarray
-            Shape: (2**n_qubits,)
-            Normalized amplitude vector.
-
-        Returns
-        -------
-        qc : QuantumCircuit
-            Circuit that initializes |x>.
-        """
-        x = self._validate(x)
-        n_qubits = self._num_qubits_from_state(x)
+    
+    def build_circuit(x):
+        x = np.asarray(x, dtype=complex)
+        n_qubits = int(np.log2(len(x)))
 
         qc = QuantumCircuit(n_qubits)
-        qc.initialize(x, list(range(n_qubits)))
+
+        prep = StatePreparation(x, normalize=False)
+        qc.append(prep, range(n_qubits))
 
         return qc
 
