@@ -1,135 +1,98 @@
 import numpy as np
-from sklearn.datasets import load_digits
+from dataclasses import dataclass
+from sklearn.datasets import load_digits, fetch_openml
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.decomposition import PCA
 
 
-class DigitAnomalyDataset:
+@dataclass
+class AnomalyDatasetConfig:
+    dataset: str = "digits"
+    normal_label: int = 0
+    anomaly_labels: list | None = None
+
+    n_train_normal: int = 120
+    n_test_normal: int = 40
+    n_test_anomaly: int = 120
+
+    feature_dim: int = 64
+    random_state: int = 7
+
+    scale: str = "minmax"       # "minmax", "standard", or None
+    use_pca: bool = True        # Useful for Fashion-MNIST and creditcard
+    normalize_vectors: bool = True
+
+    cache: bool = True          # Used by fetch_openml
+
+
+class FlexibleAnomalyDataset:
     """
-    Build an anomaly detection dataset from sklearn's built-in digits dataset.
+    General anomaly dataset builder.
 
-    This class creates the following split:
+    Supported datasets:
+        "digits"         : sklearn built-in 8x8 digits
+        "fashion_mnist"  : OpenML Fashion-MNIST, 28x28 images
+        "creditcard"     : OpenML credit-card fraud dataset
 
-        X_train_raw:
-            Contains only normal images.
-
-        X_test_raw:
-            Contains normal images and anomaly images.
-
-        y_test:
-            Binary labels for the test set.
-            0 = normal
-            1 = anomaly
-
-        raw:
-            A metadata dictionary containing original 8x8 images and labels
-            for visualization.
+    Returns:
+        X_train_raw
+        X_test_raw
+        y_test
+        raw
     """
 
-    def __init__(
-        self,
-        normal_digit=0,
-        anomaly_digits=None,
-        n_train_normal=120,
-        n_test_normal=40,
-        n_test_anomaly=120,
-        random_state=7,
-    ):
-        """
-        Parameters
-        ----------
-        normal_digit : int
-            The digit treated as the normal class.
-
-        anomaly_digits : list[int] or None
-            Digits treated as anomalies.
-            If None, all digits except normal_digit are anomalies.
-
-        n_train_normal : int
-            Number of normal examples used for training.
-
-        n_test_normal : int
-            Number of normal examples used for testing.
-
-        n_test_anomaly : int
-            Number of anomaly examples used for testing.
-
-        random_state : int
-            Random seed for reproducible splitting.
-        """
-        self.normal_digit = normal_digit
-
-        if anomaly_digits is None:
-            anomaly_digits = [d for d in range(10) if d != normal_digit]
-
-        self.anomaly_digits = anomaly_digits
-        self.n_train_normal = n_train_normal
-        self.n_test_normal = n_test_normal
-        self.n_test_anomaly = n_test_anomaly
-        self.random_state = random_state
+    def __init__(self, config: AnomalyDatasetConfig):
+        self.config = config
 
     def __call__(self):
-        """
-        Load and split the digit dataset.
+        X, y, raw = self._load_dataset()
 
-        Returns
-        -------
-        X_train_raw : np.ndarray
-            Shape: (n_train_normal, 64)
-            Flattened normalized normal training images.
+        y = np.asarray(y)
 
-        X_test_raw : np.ndarray
-            Shape: (n_test_normal + n_test_anomaly, 64)
-            Flattened normalized test images.
+        if self.config.anomaly_labels is None:
+            anomaly_labels = sorted(
+                [label for label in np.unique(y) if label != self.config.normal_label]
+            )
+        else:
+            anomaly_labels = self.config.anomaly_labels
 
-        y_test : np.ndarray
-            Shape: (n_test_normal + n_test_anomaly,)
-            Binary test labels.
-            0 = normal
-            1 = anomaly
+        normal_idx = np.where(y == self.config.normal_label)[0]
+        anomaly_idx = np.where(np.isin(y, anomaly_labels))[0]
 
-        raw : dict
-            Dictionary containing original images and labels for plotting.
-        """
-        digits = load_digits()
+        rng = np.random.default_rng(self.config.random_state)
 
-        # digits.data has shape (n_samples, 64).
-        # Pixel values are in [0, 16], so divide by 16 to put them in [0, 1].
-        X = digits.data.astype(float) / 16.0
-
-        # digits.images has shape (n_samples, 8, 8), useful for plotting.
-        images = digits.images.astype(float) / 16.0
-
-        # Original labels are integers 0-9.
-        y = digits.target
-
-        # Indices for normal examples and anomaly examples.
-        normal_idx = np.where(y == self.normal_digit)[0]
-        anomaly_idx = np.where(np.isin(y, self.anomaly_digits))[0]
-
-        rng = np.random.default_rng(self.random_state)
-
-        # Shuffle so the split is random but reproducible. 
         normal_idx = rng.permutation(normal_idx)
         anomaly_idx = rng.permutation(anomaly_idx)
 
-        # Select normal training examples.
-        train_normal_idx = normal_idx[: self.n_train_normal]
+        needed_normal = self.config.n_train_normal + self.config.n_test_normal
+        needed_anomaly = self.config.n_test_anomaly
 
-        # Select normal test examples.
+        if len(normal_idx) < needed_normal:
+            raise ValueError(
+                f"Not enough normal samples for label {self.config.normal_label}. "
+                f"Need {needed_normal}, got {len(normal_idx)}."
+            )
+
+        if len(anomaly_idx) < needed_anomaly:
+            raise ValueError(
+                f"Not enough anomaly samples for labels {anomaly_labels}. "
+                f"Need {needed_anomaly}, got {len(anomaly_idx)}."
+            )
+
+        train_normal_idx = normal_idx[: self.config.n_train_normal]
+
         test_normal_idx = normal_idx[
-            self.n_train_normal : self.n_train_normal + self.n_test_normal
+            self.config.n_train_normal :
+            self.config.n_train_normal + self.config.n_test_normal
         ]
 
-        # Select anomaly test examples.
-        test_anomaly_idx = anomaly_idx[: self.n_test_anomaly]
-
-        # Build train and test arrays.
-        X_train_raw = X[train_normal_idx]
+        test_anomaly_idx = anomaly_idx[: self.config.n_test_anomaly]
 
         test_indices = np.concatenate([test_normal_idx, test_anomaly_idx])
+
+        X_train_raw = X[train_normal_idx]
         X_test_raw = X[test_indices]
 
-        # y_test is binary:
-        # 0 for normal, 1 for anomaly.
         y_test = np.concatenate(
             [
                 np.zeros(len(test_normal_idx), dtype=int),
@@ -137,29 +100,178 @@ class DigitAnomalyDataset:
             ]
         )
 
-        raw = {
-            "train_images": images[train_normal_idx],
-            "test_images": images[test_indices],
-            "test_labels_original": y[test_indices],
-            "normal_digit": self.normal_digit,
-            "anomaly_digits": self.anomaly_digits,
-            "train_indices": train_normal_idx,
-            "test_indices": test_indices,
-        }
+        X_train_processed, X_test_processed, preprocess_info = self._preprocess(
+            X_train_raw,
+            X_test_raw,
+        )
 
-        return X_train_raw, X_test_raw, y_test, raw
+        raw.update(
+            {
+                "dataset": self.config.dataset,
+                "normal_label": self.config.normal_label,
+                "anomaly_labels": anomaly_labels,
+                "train_indices": train_normal_idx,
+                "test_indices": test_indices,
+                "test_labels_original": y[test_indices],
+                "preprocess_info": preprocess_info,
+            }
+        )
+
+        return X_train_processed, X_test_processed, y_test, raw
+
+    def _load_dataset(self):
+        dataset = self.config.dataset.lower()
+
+        if dataset == "digits":
+            digits = load_digits()
+
+            X = digits.data.astype(float) / 16.0
+            y = digits.target.astype(int)
+
+            raw = {
+                "images": digits.images.astype(float) / 16.0,
+                "feature_shape": (8, 8),
+                "original_dim": 64,
+            }
+
+            return X, y, raw
+
+        elif dataset == "fashion_mnist":
+            data = fetch_openml(
+                data_id=40996,
+                as_frame=False,
+                cache=self.config.cache,
+            )
+
+            X = data.data.astype(float) / 255.0
+            y = data.target.astype(int)
+
+            raw = {
+                "images": X.reshape(-1, 28, 28),
+                "feature_shape": (28, 28),
+                "original_dim": 784,
+                "class_names": {
+                    0: "T-shirt/top",
+                    1: "Trouser",
+                    2: "Pullover",
+                    3: "Dress",
+                    4: "Coat",
+                    5: "Sandal",
+                    6: "Shirt",
+                    7: "Sneaker",
+                    8: "Bag",
+                    9: "Ankle boot",
+                },
+            }
+
+            return X, y, raw
+
+        elif dataset == "creditcard":
+            data = fetch_openml(
+                data_id=1597,
+                as_frame=False,
+                cache=self.config.cache,
+            )
+
+            X = data.data.astype(float)
+
+            # OpenML targets often come back as strings like "0", "1".
+            y = data.target.astype(int)
+
+            raw = {
+                "images": None,
+                "feature_shape": None,
+                "original_dim": X.shape[1],
+                "class_names": {
+                    0: "normal",
+                    1: "fraud",
+                },
+            }
+
+            return X, y, raw
+
+        else:
+            raise ValueError(
+                f"Unknown dataset '{self.config.dataset}'. "
+                "Use 'digits', 'fashion_mnist', or 'creditcard'."
+            )
+
+    def _preprocess(self, X_train, X_test):
+        info = {}
+
+        X_train = np.asarray(X_train, dtype=float)
+        X_test = np.asarray(X_test, dtype=float)
+
+        if self.config.scale == "minmax":
+            scaler = MinMaxScaler()
+            X_train = scaler.fit_transform(X_train)
+            X_test = scaler.transform(X_test)
+            info["scale"] = "minmax"
+
+        elif self.config.scale == "standard":
+            scaler = StandardScaler()
+            X_train = scaler.fit_transform(X_train)
+            X_test = scaler.transform(X_test)
+            info["scale"] = "standard"
+
+        elif self.config.scale is None:
+            info["scale"] = None
+
+        else:
+            raise ValueError("scale must be 'minmax', 'standard', or None.")
+
+        if self.config.use_pca:
+            if self.config.feature_dim is None:
+                raise ValueError("feature_dim must be set when use_pca=True.")
+
+            pca = PCA(
+                n_components=self.config.feature_dim,
+                random_state=self.config.random_state,
+            )
+
+            X_train = pca.fit_transform(X_train)
+            X_test = pca.transform(X_test)
+
+            info["pca"] = True
+            info["feature_dim"] = self.config.feature_dim
+            info["explained_variance_ratio_sum"] = float(
+                np.sum(pca.explained_variance_ratio_)
+            )
+
+        else:
+            info["pca"] = False
+            info["feature_dim"] = X_train.shape[1]
+
+        if self.config.normalize_vectors:
+            X_train = self._l2_normalize(X_train)
+            X_test = self._l2_normalize(X_test)
+            info["normalize_vectors"] = True
+        else:
+            info["normalize_vectors"] = False
+
+        self._check_power_of_two(X_train.shape[1])
+
+        return X_train, X_test, info
+
+    def _l2_normalize(self, X):
+        norms = np.linalg.norm(X, axis=1, keepdims=True)
+
+        # Avoid division by zero.
+        norms[norms == 0.0] = 1.0
+
+        return X / norms
+
+    def _check_power_of_two(self, dim):
+        n_qubits_float = np.log2(dim)
+        n_qubits = int(round(n_qubits_float))
+
+        if 2**n_qubits != dim:
+            raise ValueError(
+                f"Final feature dimension must be a power of two for amplitude encoding. "
+                f"Got feature_dim={dim}."
+            )
+
+        return n_qubits
 
     def get_info(self):
-        """
-        Return a dictionary describing the dataset configuration.
-        """
-        return {
-            "dataset": "sklearn_digits",
-            "normal_digit": self.normal_digit,
-            "anomaly_digits": self.anomaly_digits,
-            "n_train_normal": self.n_train_normal,
-            "n_test_normal": self.n_test_normal,
-            "n_test_anomaly": self.n_test_anomaly,
-            "random_state": self.random_state,
-        }
-    
+        return self.config.__dict__
