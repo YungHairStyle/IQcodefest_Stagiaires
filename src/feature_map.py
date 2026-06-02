@@ -235,7 +235,7 @@ class AmplitudeFeatureMap(BaseFeatureMap):
 
         return x
     
-    def build_circuit(x):
+    def build_circuit(self, x):
         x = np.asarray(x, dtype=complex)
         n_qubits = int(np.log2(len(x)))
 

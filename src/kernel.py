@@ -96,6 +96,25 @@ class FidelityQuantumKernel(BaseKernel):
 
         return np.asarray(states, dtype=complex)
 
+    def compute_circuits(self, X):
+        """
+        Compute circuits for a batch of encoded samples.
+
+        Parameters
+        ----------
+        X : np.ndarray
+            Encoded data.
+
+        Returns
+        -------
+        states : List
+            List of circuits, has the same size as X.
+        """
+        X = np.asarray(X)
+        circuits = [self.feature_map.build_circuit(x) for x in X]
+
+        return circuits
+
     def kernel_from_states(self, states_A, states_B):
         """
         Compute the fidelity kernel from two collections of statevectors.
@@ -217,12 +236,12 @@ class FidelityQuantumKernel(BaseKernel):
             Shape: (n_train, n_train)
         """
         self.X_train_ = np.asarray(X_train)
-        train_states = self.compute_statevectors(self.X_train_)
+        train_states = self.compute_circuits(self.X_train_)
 
         if self.cache_train_states:
             self.train_states_ = train_states
 
-        K_train = self.kernel_from_states(train_states, train_states)
+        K_train = self.kernel_from_circuits(train_states, train_states, mode="aer", shots=5)
 
         return K_train
 
@@ -246,10 +265,10 @@ class FidelityQuantumKernel(BaseKernel):
         """
         X_test = np.asarray(X_test)
 
-        test_states = self.compute_statevectors(X_test)
+        test_states = self.compute_circuits(X_test)
 
         if X_train is not None:
-            train_states = self.compute_statevectors(X_train)
+            train_states = self.compute_circuits(X_train)
         else:
             if self.train_states_ is None:
                 raise RuntimeError(
@@ -258,7 +277,7 @@ class FidelityQuantumKernel(BaseKernel):
                 )
             train_states = self.train_states_
 
-        K_test = self.kernel_from_states(test_states, train_states)
+        K_test = self.kernel_from_circuits(test_states, train_states, mode="aer", shots=5)
 
         return K_test
 
